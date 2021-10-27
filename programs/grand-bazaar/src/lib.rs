@@ -2,14 +2,15 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, CloseAccount, Mint, SetAuthority, TokenAccount, Transfer};
 use spl_token::instruction::AuthorityType;
 
-//TODO: Update program ID after anchor build
-declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+//TODO: Verify program ID after each anchor build
+declare_id!("67KSpEYQ7ndqVy3ZYFM3RUSMTdTrVXVCBrYof1qeADme");
 
 #[program]
 pub mod grand_bazaar {
     use super::*;
 
     const ESCROW_PDA_SEED: &[u8] = b"escrow";
+    //QS: How is above stored? Can someone deserialize and get the seed?
 
     pub fn initialize_escrow(
         ctx: Context<InitializeEscrow>,
@@ -69,6 +70,61 @@ pub mod grand_bazaar {
     //(ii) create PDA, then set authority of vault_account to the PDA
     //(iii) transfer deposit tokens from the initializer_deposit_token_account to the vault
 
+    pub fn cancel_escrow(ctx: Context<CancelEscrow>) -> ProgramResult {
+        let (_vault_authority, vault_account_bump) =
+            Pubkey::find_program_address(&[ESCROW_PDA_SEED], ctx.program_id);
+        let authority_seeds = &[&ESCROW_PDA_SEED[..], &[vault_account_bump]];
+
+        token::transfer(
+            ctx.accounts
+                .into_transfer_to_initializer_context()
+                .with_signer(&[&authority_seeds[..]]),
+                //QS: What is above line doing? Why need it?
+            ctx.accounts.escrow_account.initializer_amount,
+        )?;
+
+        token::close_account(
+            ctx.accounts
+                .into_close_context()
+                .with_signer(&[&authority_seeds[..]]),
+        )?;
+        Ok(())
+    }
+    //NTS: To summarize cancel_escrow: derive PDA, transfer vault tokens back to initializer,
+    //      closes vault_accounts
+    //QS: Don't quite understand what authority_seeds is doing. Docs not very expressive
+    //QS: Don't we also need to close the EscrowAccount in addition to the vault_account?
+
+    pub fn exchange(ctx: Context<Exchange>) -> ProgramResult {
+        let (_vault_authority, vault_authority_bump) =
+            Pubkey::find_program_address(&[ESCROW_PDA_SEED], ctx.program_id);
+        let authority_seeds = &[&ESCROW_PDA_SEED[..], &[vault_authority_bump]];
+
+        token::transfer(
+            ctx.accounts.into_transfer_to_initializer_context(),
+            ctx.accounts.escrow_account.taker_amount,
+        )?;
+
+        token::transfer(
+            ctx.accounts.into_transfer_to_taker_context()
+                .with_signer(&[&authority_seeds[..]]),
+                //NTS: Ah! okay so when the transfer authority is not the signer of the current tx,
+                //      here signer = taker and transfer authority = PDA,
+                //      you will need to sign with PDA seeds, which is a combo of ESCROW_PDA_SEED
+                //      and vault_authority_bump..
+                //QS: But could someone theoretically take control of the PDA if they found
+                //      ESCROW_PDA_SEED??
+            ctx.accounts.escrow_account.initializer_amount,
+        )?;
+
+        token::close_account(
+            ctx.accounts.into_close_context()
+                .with_signer(&[&authority_seeds[..]]),
+        )?;
+
+        Ok(())
+
+    }
 }
 
 #[derive(Accounts)]
@@ -109,6 +165,63 @@ pub struct InitializeEscrow<'info> {
 
 }
 
+#[derive(Accounts)]
+pub struct CancelEscrow<'info> {
+    #[account(mut, signer)]
+    pub initializer: AccountInfo<'info>,
+    #[account(mut)]
+    pub vault_account: Account<'info, TokenAccount>,
+    pub vault_authority: AccountInfo<'info>,
+    #[account(mut)]
+    pub initializer_deposit_token_account: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = escrow_account.initializer_key == *initializer.key,
+        constraint =
+            escrow_account.initializer_deposit_token_account ==
+            *initializer_deposit_token_account.to_account_info().key,
+            //NTS: I see why this is here but potential bug possible if initializer migrated token
+            //      acounts after inititalizing right?
+        close = initializer
+    )]
+    pub escrow_account: ProgramAccount<'info, EscrowAccount>,
+    pub token_program: AccountInfo<'info>,
+}
+
+#[derive(Accounts)]
+pub struct Exchange<'info> {
+    #[account(signer)]
+    pub taker: AccountInfo<'info>,
+    #[account(mut)]
+    pub taker_deposit_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub taker_receive_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub initializer_deposit_token_account: Account<'info, TokenAccount>,
+    //QS: same potential migration bug?
+    #[account(mut)]
+    pub initializer_receive_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub initializer: AccountInfo<'info>,
+    #[account(
+        mut,
+        constraint = escrow_account.taker_amount <= taker_deposit_token_account.amount,
+        constraint =
+            escrow_account.initializer_deposit_token_account ==
+            *initializer_deposit_token_account.to_account_info().key,
+        constraint =
+            escrow_account.initializer_receive_token_account ==
+            *initializer_receive_token_account.to_account_info().key,
+        constraint = escrow_account.initializer_key == *initializer.key,
+        close = initializer
+    )]
+    pub escrow_account: ProgramAccount<'info, EscrowAccount>,
+    #[account(mut)]
+    pub vault_account: Account<'info, TokenAccount>,
+    pub vault_authority: AccountInfo<'info>,
+    pub token_program: AccountInfo<'info>,
+}
+
 #[account]
 pub struct EscrowAccount{
     pub initializer_key: Pubkey,
@@ -143,4 +256,65 @@ impl <'info> InitializeEscrow<'info> {
     //QS: Do we not need to create a token account for vault_account to hold the deposited tokens?
     //A: Vault account is already a token account so no need?
 
+}
+
+impl <'info> CancelEscrow<'info> {
+    fn into_transfer_to_initializer_context(
+        &self,
+    ) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        let cpi_accounts = Transfer {
+            from: self.vault_account.to_account_info().clone(),
+            to: self.initializer_deposit_token_account.to_account_info().clone(),
+            //NTS: same potential problem with migration as before right?
+            authority: self.vault_authority.clone(),
+        };
+
+        let cpi_program = self.token_program.to_account_info();
+        CpiContext::new(cpi_program, cpi_accounts)
+    }
+
+    fn into_close_context(&self) -> CpiContext<'_, '_, '_, 'info, CloseAccount<'info>> {
+        let cpi_accounts = CloseAccount {
+            account: self.vault_account.to_account_info().clone(),
+            destination: self.initializer.clone(),
+            authority: self.vault_authority.clone(),
+        };
+        //QS: What's happening under hood here? Why destination for close account?
+        let cpi_program = self.token_program.to_account_info();
+        CpiContext::new(cpi_program, cpi_accounts)
+    }
+}
+
+impl <'info> Exchange<'info> {
+    fn into_transfer_to_initializer_context(
+        &self,
+    ) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        let cpi_accounts = Transfer {
+            from: self.taker_deposit_token_account.to_account_info().clone(),
+            to: self.initializer_receive_token_account.to_account_info().clone(),
+            authority: self.taker.clone(),
+        };
+        let cpi_program = self.token_program.to_account_info();
+        CpiContext::new(cpi_program, cpi_accounts)
+    }
+
+    fn into_transfer_to_taker_context(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        let cpi_accounts = Transfer {
+            from: self.vault_account.to_account_info().clone(),
+            to: self.taker_receive_token_account.to_account_info().clone(),
+            authority: self.vault_authority.clone(),
+        };
+        CpiContext::new(self.token_program.clone(), cpi_accounts)
+        //QS: Why do some cpi's take token_program.clone and others token_program.to_account_info?
+        //      token_program is already an AccountInfo struct so latter is not necessary right?
+    }
+
+    fn into_close_context(&self) -> CpiContext<'_, '_, '_, 'info, CloseAccount<'info>> {
+        let cpi_accounts = CloseAccount {
+            account: self.vault_account.to_account_info().clone(),
+            destination: self.initializer.clone(),
+            authority: self.vault_authority.clone(),
+        };
+        CpiContext::new(self.token_program.clone(), cpi_accounts)
+    }
 }
