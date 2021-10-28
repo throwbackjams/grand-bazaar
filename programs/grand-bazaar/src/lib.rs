@@ -10,7 +10,7 @@ pub mod grand_bazaar {
     use super::*;
 
     const ESCROW_PDA_SEED: &[u8] = b"escrow";
-    //QS: How is above stored? Can someone deserialize and get the seed?
+    //QS: How is above stored? Can someone deserialize and get the seed and derive the vault authority?
 
     pub fn initialize_escrow(
         ctx: Context<InitializeEscrow>,
