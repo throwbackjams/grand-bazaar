@@ -1,6 +1,6 @@
 {
   "dependencies": {
-    "@project-serum/anchor": "latest",
+    "@project-serum/anchor": "0.17.0",
     "@project-serum/serum": "latest",
     "@solana/spl-token": "latest",
     "@solana/web3.js": "latest",
