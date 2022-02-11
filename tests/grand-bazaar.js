@@ -35,6 +35,18 @@ describe("grand-bazaar multiple offers 2 token unit test", () => {
   const offeror2MainAccount = anchor.web3.Keypair.generate();
   const acceptorMainAccount = anchor.web3.Keypair.generate();
 
+  console.log("Listing Account: ", listingAccount.publicKey.toBase58());
+  console.log("Offer 1 Account: ",offer1Account.publicKey.toBase58());
+  console.log("Offer 2 Account: ", offer2Account.publicKey.toBase58());
+  console.log("Payer: ", payer.publicKey.toBase58());
+  console.log("Mint Authority: ",mintAuthority.publicKey.toBase58());
+  console.log("Offeror 1 Main Account: ", offeror1MainAccount.publicKey.toBase58());
+  console.log("Offeror 2 Main Account: ", offeror2MainAccount.publicKey.toBase58());
+  console.log("Acceptor Main Account: ", acceptorMainAccount.publicKey.toBase58());
+  console.log("Offer 1 Amount:", offer1Amount);
+  console.log("Offer 2 Amount:", offer2Amount);
+  console.log("Acceptor Amount:", acceptorAmount);
+
   it("initialize starting state", async () => {
     //Airdrop tokens to a payer
     await provider.connection.confirmTransaction(
@@ -182,7 +194,7 @@ describe("grand-bazaar multiple offers 2 token unit test", () => {
       _offer_vault_account_pda,
       _offer_vault_account_bump,
     ] = await web3.PublicKey.findProgramAddress(
-      [Buffer.from(anchor.utils.bytes.utf8.encode("offer-seed"))],
+      [Buffer.from(anchor.utils.bytes.utf8.encode("offer-seed")), offeror1MainAccount.publicKey.toBuffer()],
       program.programId
     );
 
@@ -193,11 +205,11 @@ describe("grand-bazaar multiple offers 2 token unit test", () => {
       _offer_vault_authority_pda,
       _offer_vault_authority_bump,
     ] = await web3.PublicKey.findProgramAddress(
-      [Buffer.from(anchor.utils.bytes.utf8.encode("offer"))],
+      [Buffer.from(anchor.utils.bytes.utf8.encode("offer")), offeror1MainAccount.publicKey.toBuffer()],
       program.programId
     );
 
-    offer_vault_authority_pda = _offer_vault_account_pda;
+    offer_vault_authority_pda = _offer_vault_authority_pda;
 
     await program.rpc.initializeOffer(
       offer_vault_account_bump,
@@ -222,12 +234,300 @@ describe("grand-bazaar multiple offers 2 token unit test", () => {
       }
     );
 
-    let _offer_vault = await mintA.getAccountInfo(offer_vault_account_pda);
+    let _offerVault = await mintA.getAccountInfo(offer_vault_account_pda);
 
-    let _offer_account = await program.accounts.offerAccount.fetch(
-      offerAccount.publicKey
+    let _offerAccount = await program.account.offerAccount.fetch(
+      offer1Account.publicKey
     );
+
+    console.log("Offer 1 vault account PDA: ", offer_vault_account_pda.toBase58());
+    console.log("Offer 1 vault authority PDA: ", offer_vault_authority_pda.toBase58());
+    console.log("offerAccount.Offerkey: ", _offerAccount.offerorKey.toBase58());
+    console.log("offerAccount.offeror_amount: ", _offerAccount.offerorAmount.toNumber());
+    console.log("offerAccount.acceptor_amount: ", _offerAccount.acceptorAmount.toNumber());
+    
+    assert.ok(_offerVault.owner.equals(offer_vault_authority_pda));
+    assert.ok(_offerVault.amount.toNumber() == offer1Amount);
+
+    assert.ok(_offerAccount.offerorKey.equals(offeror1MainAccount.publicKey));
+    assert.ok(_offerAccount.offerorDepositTokenAccount.equals(offeror1TokenAccountA));
+    assert.ok(_offerAccount.offerorReceiveTokenAccount.equals(offeror1TokenAccountB));
+    assert.ok(_offerAccount.offerorAmount.toNumber() == offer1Amount);
+    assert.ok(_offerAccount.acceptorAmount.toNumber() == acceptorAmount);
+
   });
+
+  it("Initialize offer 2", async () => {
+
+    const [
+      _offer_vault_account_pda,
+      _offer_vault_account_bump,
+    ] = await web3.PublicKey.findProgramAddress(
+      [Buffer.from(anchor.utils.bytes.utf8.encode("offer-seed")), offeror2MainAccount.publicKey.toBuffer()],
+      program.programId
+    );
+
+    offer_vault_account_pda = _offer_vault_account_pda;
+    offer_vault_account_bump = _offer_vault_account_bump;
+
+    const [
+      _offer_vault_authority_pda,
+      _offer_vault_authority_bump,
+    ] = await web3.PublicKey.findProgramAddress(
+      [Buffer.from(anchor.utils.bytes.utf8.encode("offer")), offeror2MainAccount.publicKey.toBuffer()],
+      program.programId
+    );
+
+    offer_vault_authority_pda = _offer_vault_authority_pda;
+
+    await program.rpc.initializeOffer(
+      offer_vault_account_bump,
+      new anchor.BN(offer2Amount),
+      new anchor.BN(acceptorAmount),
+      {
+        accounts: {
+          offeror: offeror2MainAccount.publicKey,
+          offerVaultAccount: offer_vault_account_pda,
+          mint: mintA.publicKey,
+          offerorDepositTokenAccount: offeror2TokenAccountA,
+          offerorReceiveTokenAccount: offeror2TokenAccountB,
+          offerAccount: offer2Account.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
+          rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+          tokenProgram: spl_token.TOKEN_PROGRAM_ID,
+        },
+        instructions: [
+          await program.account.offerAccount.createInstruction(offer2Account),
+        ],
+        signers: [offer2Account, offeror2MainAccount],
+      }
+    );
+
+    let _offerVault = await mintA.getAccountInfo(offer_vault_account_pda);
+
+    let _offerAccount = await program.account.offerAccount.fetch(offer2Account.publicKey);
+    
+    console.log("Offer 2 vault account PDA: ", offer_vault_account_pda.toBase58());
+    console.log("Offer 2 vault authority PDA: ", offer_vault_authority_pda.toBase58());
+    console.log("offerAccount.Offerkey: ", _offerAccount.offerorKey.toBase58());
+    console.log("offerAccount.offeror_amount: ", _offerAccount.offerorAmount.toNumber());
+    console.log("offerAccount.acceptor_amount: ", _offerAccount.acceptorAmount.toNumber());
+
+    assert.ok(_offerVault.owner.equals(offer_vault_authority_pda));
+    assert.ok(_offerVault.amount.toNumber() == offer2Amount);
+
+    assert.ok(_offerAccount.offerorKey.equals(offeror2MainAccount.publicKey));
+    assert.ok(_offerAccount.offerorDepositTokenAccount.equals(offeror2TokenAccountA));
+    assert.ok(_offerAccount.offerorReceiveTokenAccount.equals(offeror2TokenAccountB));
+    assert.ok(_offerAccount.offerorAmount.toNumber() == offer2Amount);
+    assert.ok(_offerAccount.acceptorAmount.toNumber() == acceptorAmount);
+
+  });
+
+  it("Accept offer 2", async() => {
+
+    const [
+      _offer_vault_account_pda,
+      _offer_vault_account_bump,
+    ] = await web3.PublicKey.findProgramAddress(
+      [Buffer.from(anchor.utils.bytes.utf8.encode("offer-seed")), offeror2MainAccount.publicKey.toBuffer()],
+      program.programId
+    );
+
+    offer_vault_account_pda = _offer_vault_account_pda;
+    offer_vault_account_bump = _offer_vault_account_bump;
+
+    const [
+      _offer_vault_authority_pda,
+      _offer_vault_authority_bump,
+    ] = await web3.PublicKey.findProgramAddress(
+      [Buffer.from(anchor.utils.bytes.utf8.encode("offer")), offeror2MainAccount.publicKey.toBuffer()],
+      program.programId
+    );
+
+    offer_vault_authority_pda = _offer_vault_authority_pda;
+
+    await program.rpc.acceptOffer(
+      {
+        accounts: {
+          acceptor: acceptorMainAccount.publicKey,
+          acceptorDepositTokenAccount: acceptorTokenAccountB,
+          acceptorReceiveTokenAccount: acceptorTokenAccountA,
+          offerorDepositTokenAccount: offeror2TokenAccountA,
+          offerorReceiveTokenAccount: offeror2TokenAccountB,
+          offeror: offeror2MainAccount.publicKey,
+          offerAccount: offer2Account.publicKey,
+          offerVaultAccount: offer_vault_account_pda,
+          offerVaultAuthority: offer_vault_authority_pda,
+          tokenProgram: spl_token.TOKEN_PROGRAM_ID,
+        },
+        signers: [acceptorMainAccount]
+      }
+    );
+
+    let _acceptorTokenAccountA = await mintA.getAccountInfo(acceptorTokenAccountA);
+
+    assert.ok(_acceptorTokenAccountA.amount.toNumber() == offer2Amount);
+
+    let _acceptorTokenAccountB = await mintB.getAccountInfo(acceptorTokenAccountB);
+    let _offeror2TokenAccountA = await mintA.getAccountInfo(offeror2TokenAccountA); 
+    let _offeror2TokenAccountB = await mintB.getAccountInfo(offeror2TokenAccountB); 
+    let _offeror1TokenAccountA = await mintA.getAccountInfo(offeror1TokenAccountA); 
+    let _offeror1TokenAccountB = await mintB.getAccountInfo(offeror1TokenAccountB); 
+
+    assert.ok(_acceptorTokenAccountA.amount.toNumber() == offer2Amount);
+    assert.ok(_acceptorTokenAccountB.amount.toNumber() == 0);
+    assert.ok(_offeror2TokenAccountA.amount.toNumber() == 0);
+    assert.ok(_offeror2TokenAccountB.amount.toNumber() == acceptorAmount);
+    assert.ok(_offeror1TokenAccountA.amount.toNumber() == 0);
+    assert.ok(_offeror1TokenAccountB.amount.toNumber() == 0);
+
+    console.log("acceptorTokenAccountA: ", _acceptorTokenAccountA.amount.toNumber());
+    console.log("acceptorTokenAccountB: ", _acceptorTokenAccountB.amount.toNumber());
+    console.log("offeror2TokenAccountA: ", _offeror2TokenAccountA.amount.toNumber());
+    console.log("offeror2TokenAccountB: ", _offeror2TokenAccountB.amount.toNumber());
+    console.log("offeror1TokenAccountA: ", _offeror1TokenAccountA.amount.toNumber());
+    console.log("offeror1TokenAccountB: ", _offeror1TokenAccountB.amount.toNumber());
+
+    //Check if offer vault is closed properly
+    try {
+      await mintA.getAccountInfo(offer_vault_account_pda);
+    } catch (err) {
+      return err;
+    }
+
+    assert.ok(err.toString() == "Error: Failed to find account")
+
+
+  });
+
+  it("cancel offer 1 (close & return deposit)", async () => {
+
+    const [
+      _offer_vault_account_pda,
+      _offer_vault_account_bump,
+    ] = await web3.PublicKey.findProgramAddress(
+      [Buffer.from(anchor.utils.bytes.utf8.encode("offer-seed")), offeror1MainAccount.publicKey.toBuffer()],
+      program.programId
+    );
+
+    offer_vault_account_pda = _offer_vault_account_pda;
+    offer_vault_account_bump = _offer_vault_account_bump;
+
+    const [
+      _offer_vault_authority_pda,
+      _offer_vault_authority_bump,
+    ] = await web3.PublicKey.findProgramAddress(
+      [Buffer.from(anchor.utils.bytes.utf8.encode("offer")), offeror1MainAccount.publicKey.toBuffer()],
+      program.programId
+    );
+
+    offer_vault_authority_pda = _offer_vault_authority_pda;
+
+    console.log("offeror1MainAccount: ", offeror1MainAccount.publicKey.toBase58());
+
+    await program.rpc.cancelOffer(
+      {
+        accounts: {
+          offeror: offeror1MainAccount.publicKey,
+          offerVaultAccount: offer_vault_account_pda,
+          offerVaultAuthority: offer_vault_authority_pda,
+          offerorDepositTokenAccount: offeror1TokenAccountA,
+          offerAccount: offer1Account.publicKey,
+          tokenProgram: spl_token.TOKEN_PROGRAM_ID,
+        },
+        signers: [offeror1MainAccount]
+      }
+    );
+
+    const _offeror1TokenAccountA = await mintA.getAccountInfo(offeror1TokenAccountA);
+    assert.ok(_offeror1TokenAccountA.owner.equals(offeror1MainAccount.publicKey));
+    assert.ok(_offeror1TokenAccountA.amount.toNumber() == offer1Amount);
+
+  });
+  //test to cancel offer 1 , close the vault account and return the deposit tokens to offeroer1TokenAccountA
+
+  // it("View both offer 1 and offer 2 and accept offer 2", async () => {
+  //   let _offer1Account = await program.account.offerAccount.fetch(offer1Account.publicKey)
+  //   let _offer2Account = await program.account.offerAccount.fetch(offer2Account.publicKey);
+
+  //   console.log(_offer1Account.offerorAmount.toNumber());
+  //   console.log(_offer2Account.offerorAmount.toNumber());
+  //   assert.ok(_offer1Account.offerorAmount.toNumber() == offer1Amount);
+  //   assert.ok(_offer2Account.offerorAmount.toNumber() == offer2Amount);
+
+  //   const [
+  //     _offer_vault_account_pda,
+  //     _offer_vault_account_bump,
+  //   ] = await web3.PublicKey.findProgramAddress(
+  //     [Buffer.from(anchor.utils.bytes.utf8.encode("offer-seed")), offeror2MainAccount.publicKey.toBuffer()],
+  //     program.programId
+  //   );
+
+  //   offer_vault_account_pda = _offer_vault_account_pda;
+  //   offer_vault_account_bump = _offer_vault_account_bump;
+
+  //   const [
+  //     _offer_vault_authority_pda,
+  //     _offer_vault_authority_bump,
+  //   ] = await web3.PublicKey.findProgramAddress(
+  //     [Buffer.from(anchor.utils.bytes.utf8.encode("offer")), offeror2MainAccount.publicKey.toBuffer()],
+  //     program.programId
+  //   );
+
+  //   offer_vault_authority_pda = _offer_vault_authority_pda;
+
+  //   await program.rpc.acceptOffer(
+  //     {
+  //       accounts: {
+  //         acceptor: acceptorMainAccount.publicKey,
+  //         acceptorDepositTokenAccount: acceptorTokenAccountB,
+  //         acceptorReceiveTokenAccount: acceptorTokenAccountA,
+  //         offerorDepositTokenAccount: offer2Account.offerorDepositTokenAccount,
+  //         offerorReceiveTokenAccount: offer2Account.offerorReceiveTokenAccount,
+  //         offeror: offer2Account.offerorKey,
+  //         offerAccount: offer2Account.publicKey,
+  //         offerVaultAccount: offer_vault_account_pda,
+  //         offerVaultAuthority: offer_vault_authority_pda,
+  //         tokenProgram: spl_token.TOKEN_PROGRAM_ID,
+  //       },
+  //       signers: [acceptorMainAccount]
+  //     }
+  //   );
+
+  //   let acceptorTokenAccountA = await mintA.getAccountInfo(acceptorTokenAccountA);
+  //   let acceptorTokenAccountB = await mintA.getAccountInfo(acceptorTokenAccountB);
+  //   let offeror2TokenAccountA = await mintA.getAccountInfo(offeror2TokenAccountA); 
+  //   let offeror2TokenAccountB = await mintA.getAccountInfo(offeror2TokenAccountB); 
+  //   let offeror1TokenAccountA = await mintA.getAccountInfo(offeror1TokenAccountA); 
+  //   let offeror1TokenAccountB = await mintA.getAccountInfo(offeror1TokenAccountB); 
+
+  //   assert.ok(acceptorTokenAccountA.amount.toNumber() == offer2Amount);
+  //   assert.ok(acceptorTokenAccountB.amount.toNumber() == 0);
+  //   assert.ok(offeror2TokenAccountA.amount.toNumber() == 0);
+  //   assert.ok(offeror2TokenAccountB.amount.toNumber() == acceptorAmount);
+  //   assert.ok(offeror1TokenAccountA.amount.toNumber() == offer1Amount);
+  //   assert.ok(offeror1TokenAccountB.amount.toNumber() == 0);
+
+  //   console.log("acceptorTokenAccountA: ", acceptorTokenAccountA.amount.toNumber());
+  //   console.log("acceptorTokenAccountB: ", acceptorTokenAccountB.amount.toNumber());
+  //   console.log("offeror2TokenAccountA: ", offeror2TokenAccountA.amount.toNumber());
+  //   console.log("offeror2TokenAccountB: ", offeror2TokenAccountB.amount.toNumber());
+  //   console.log("offeror1TokenAccountA: ", offeror1TokenAccountA.amount.toNumber());
+  //   console.log("offeror1TokenAccountA: ", offeror1TokenAccountB.amount.toNumber());
+
+  //   try {
+  //     await mintA.getAccountInfo(offer_vault_account_pda);
+  //   } catch (err) {
+  //     console.log(err);
+  //     return err;
+  //   }
+
+  //   assert.ok(err.toString() == "Error: Failed to find account")
+
+  // });
+
+
   //
   // it("Initialize escrow (instruction)", async () => {
   //   const [

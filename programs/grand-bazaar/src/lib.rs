@@ -3,7 +3,7 @@ use anchor_spl::token::{self, CloseAccount, Mint, SetAuthority, TokenAccount, Tr
 use spl_token::instruction::AuthorityType;
 
 //TODO: Verify program ID after each anchor build
-declare_id!("67KSpEYQ7ndqVy3ZYFM3RUSMTdTrVXVCBrYof1qeADme");
+declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
 #[program]
 pub mod grand_bazaar {
@@ -43,6 +43,7 @@ pub mod grand_bazaar {
         offeror_amount: u64,
         acceptor_amount: u64,
     ) -> ProgramResult {
+        msg!("Beginning assignment of Offer Account");
         ctx.accounts.offer_account.offeror_key = *ctx.accounts.offeror.key;
         ctx.accounts
             .offer_account
@@ -64,15 +65,22 @@ pub mod grand_bazaar {
 
         ctx.accounts.offer_account.offeror_amount = offeror_amount;
         ctx.accounts.offer_account.acceptor_amount = acceptor_amount;
-
+        
+        msg!("Finished Assigning Offer_Account");
+        
         let(vault_authority, _vault_authority_bump) =
-            Pubkey::find_program_address(&[OFFER_PDA_SEED], ctx.program_id);
-
+        Pubkey::find_program_address(&[OFFER_PDA_SEED.as_ref(), ctx.accounts.offeror.key.as_ref()], ctx.program_id);
+        
+        msg!("About to set authority to: {:?}", vault_authority);
+        msg!("program.id: {:?}", ctx.program_id);
+        
         token::set_authority(
             ctx.accounts.into_set_authority_context(),
             AuthorityType::AccountOwner,
             Some(vault_authority),
         )?;
+
+        msg!("Offer Vault authority: {:?}", ctx.accounts.offer_vault_account.owner);
 
         token::transfer(
             ctx.accounts.into_transfer_to_pda_context(),
@@ -84,9 +92,9 @@ pub mod grand_bazaar {
     }
 
     pub fn cancel_offer(ctx: Context<CancelOffer>) -> ProgramResult {
-        let (_offer_vault_authority, offer_vault_account_bump) =
-            Pubkey::find_program_address(&[OFFER_PDA_SEED], ctx.program_id);
-        let authority_seeds = &[&OFFER_PDA_SEED[..], &[offer_vault_account_bump]];
+        let (_offer_vault_authority, offer_vault_authority_bump) =
+            Pubkey::find_program_address(&[OFFER_PDA_SEED.as_ref(), ctx.accounts.offeror.key.as_ref()], ctx.program_id);
+        let authority_seeds = &[OFFER_PDA_SEED.as_ref(), ctx.accounts.offeror.key.as_ref(), &[offer_vault_authority_bump]];
 
         token::transfer(
             ctx.accounts
@@ -100,6 +108,7 @@ pub mod grand_bazaar {
                 .into_close_context()
                 .with_signer(&[&authority_seeds[..]]),
         )?;
+        
         Ok(())
     }
     //NTS: To summarize cancel_escrow: derive PDA, transfer vault tokens back to offeror,
@@ -108,8 +117,8 @@ pub mod grand_bazaar {
 
     pub fn accept_offer(ctx: Context<AcceptOffer>) -> ProgramResult {
         let (_offer_vault_authority, offer_vault_authority_bump) =
-            Pubkey::find_program_address(&[OFFER_PDA_SEED], ctx.program_id);
-        let authority_seeds = &[&OFFER_PDA_SEED[..], &[offer_vault_authority_bump]];
+            Pubkey::find_program_address(&[OFFER_PDA_SEED.as_ref(), ctx.accounts.offeror.key.as_ref()], ctx.program_id);
+        let authority_seeds = &[OFFER_PDA_SEED.as_ref(), ctx.accounts.offeror.key.as_ref(), &[offer_vault_authority_bump]];
 
         token::transfer(
             ctx.accounts.into_transfer_to_offeror_context(),
@@ -134,14 +143,10 @@ pub mod grand_bazaar {
 
 #[derive(Accounts)]
 #[instruction(initializer_amount:u64)]
-//QS: Refresh what the instruction macro does. Does it feed in vault_account_bump in the below?
 pub struct InitializeListing<'info> {
     #[account(mut, signer)]
-    //NTS: Give this account ability to update state and to ensure it's the signer of tx
     pub initializer: AccountInfo<'info>,
-    //QS: AccountInfo vs. Account struct? Believe AccountInfo is required field in Account
     pub mint: Account<'info, Mint>,
-    //deserialize into Mint account?
     #[account(
         mut,
         constraint = initializer_deposit_token_account.amount >= initializer_amount
@@ -159,7 +164,9 @@ pub struct OfferEscrow<'info> {
     pub mint: Account<'info, Mint>,
     #[account(
         init,
-        seeds = [b"offer-seed".as_ref()],
+        seeds = [
+            b"offer-seed".as_ref(),
+            offeror.key.as_ref()],
         bump = offer_vault_account_bump,
         payer = offeror,
         token::mint = mint,
@@ -172,7 +179,8 @@ pub struct OfferEscrow<'info> {
     )]
     pub offeror_deposit_token_account: Account<'info, TokenAccount>,
     pub offeror_receive_token_account: Account<'info, TokenAccount>,
-    pub offer_account: ProgramAccount<'info, OfferAccount>,
+    #[account(zero)]
+    pub offer_account: Account<'info, OfferAccount>,
     pub system_program: AccountInfo<'info>,
     pub rent: Sysvar<'info, Rent>,
     pub token_program: AccountInfo<'info>,
@@ -259,7 +267,7 @@ impl <'info> OfferEscrow<'info> {
             account_or_mint: self.offer_vault_account.to_account_info().clone(),
             current_authority: self.offeror.clone(),
         };
-        let cpi_program = self.token_program.to_account_info();
+        let cpi_program = self.token_program.clone();
         CpiContext::new(cpi_program, cpi_accounts)
     }
 
@@ -271,11 +279,6 @@ impl <'info> OfferEscrow<'info> {
         };
         CpiContext::new(self.token_program.clone(), cpi_accounts)
     }
-    //NTS: Above function creates a cpi of token::Transfer and transfers deposit tokens from wallet
-    //     token account to vault deposit token account. cpi_accounts is more like instructions+
-    //     accounts
-    //QS: Do we not need to create a token account for vault_account to hold the deposited tokens?
-    //A: Vault account is already a token account so no need?
 
 }
 
@@ -300,7 +303,6 @@ impl <'info> CancelOffer<'info> {
             destination: self.offeror.clone(),
             authority: self.offer_vault_authority.clone(),
         };
-        //QS: What's happening under hood here? Why destination for close account?
         let cpi_program = self.token_program.to_account_info();
         CpiContext::new(cpi_program, cpi_accounts)
     }
